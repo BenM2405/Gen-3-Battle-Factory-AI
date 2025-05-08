@@ -1,0 +1,182 @@
+Acid Armor
+Aerial Ace
+Agility
+Air Cutter
+Amnesia
+AncientPower
+Aromatherapy
+Astonish
+Attract
+Barrier
+Baton Pass
+Belly Drum
+Bite
+Blaze Kick
+Blizzard
+Block
+Body Slam
+Bonemerang
+Bounce
+Brick Break
+Bulk Up
+Calm Mind
+Charm
+Confuse Ray
+Cosmic Power
+Counter
+Cross Chop
+Crunch
+Crush Claw
+Curse
+Defense Curl
+Destiny Bond
+Detect
+Dig
+Disable
+Dive
+Dizzy Punch
+Double Kick
+Double Team
+Double-Edge
+Dragon Claw
+Dragon Dance
+DragonBreath
+Dream Eater
+Drill Peck
+DynamicPunch
+Earthquake
+Encore
+Endure
+Explosion
+Extrasensory
+ExtremeSpeed
+Facade
+Faint Attack
+Fake Out
+Fake Tears
+Fire Blast
+Fire Punch
+Fissure
+Flail
+Flamethrower
+Flash
+Fly
+Focus Punch
+Follow Me
+Frustration
+Future Sight
+Giga Drain
+GrassWhistle
+Grudge
+Hail
+Headbutt
+Heat Wave
+Hi Jump Kick
+Horn Drill
+Hydro Pump
+Hyper Beam
+Hyper Voice
+Hypnosis
+Ice Beam
+Ice Punch
+Icy Wind
+Ingrain
+Iron Tail
+Knock Off
+Leaf Blade
+Leech Seed
+Light Screen
+Lovely Kiss
+Luster Purge
+Mach Punch
+Magical Leaf
+Mean Look
+Mega Kick
+Megahorn
+Memento
+Metal Claw
+Meteor Mash
+Metronome
+Milk Drink
+Minimize
+Mirror Coat
+Mist Ball
+Moonlight
+Mud-Slap
+Night Shade
+Nightmare
+Outrage
+Overheat
+Pain Split
+Perish Song
+Petal Dance
+Protect
+Psych Up
+Psychic
+Pursuit
+Quick Attack
+Rain Dance
+Recover
+Reflect
+Refresh
+Rest
+Return
+Revenge
+Reversal
+Roar
+Rock Slide
+Rock Tomb
+Rollout
+Safeguard
+Sand Tomb
+Sand-Attack
+Sandstorm
+Scary Face
+Screech
+Secret Power
+Seismic Toss
+Shadow Ball
+Sheer Cold
+Signal Beam
+Silver Wind
+Sing
+Skill Swap
+Sky Attack
+Sky Uppercut
+Slash
+Sleep Powder
+Sleep Talk
+Sludge Bomb
+SmellingSalt
+SmokeScreen
+Softboiled
+SolarBeam
+Spark
+Spikes
+Spore
+Steel Wing
+Stun Spore
+Substitute
+Sunny Day
+Superpower
+Surf
+Swagger
+Sweet Scent
+Swift
+Swords Dance
+Synthesis
+Thrash
+Thunder
+Thunder Wave
+ThunderPunch
+Thunderbolt
+Torment
+Toxic
+Tri Attack
+Trick
+Water Pulse
+Will-O-Wisp
+Wish
+Wrap
+Yawn
+Zap Cannon
