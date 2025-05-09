@@ -53,7 +53,7 @@ move_types = {
     'ExtremeSpeed': {'type': 'Normal', 'category': 'Physical', 'effect': '', 'accuracy': 100},
     'Facade': {'type': 'Normal', 'category': 'Physical', 'effect': '', 'power': 70, 'accuracy': 100},
     'Faint Attack': {'type': 'Dark', 'category': 'Physical', 'effect': '', 'accuracy': 100},
-    'Fake Out': {'type': 'Normal', 'category': 'Physical', 'effect': '', 'power': 40, 'accuracy': 100},
+    'Fake Out': {'type': 'Normal', 'category': 'Physical', 'effect': '', 'power': 40, 'accuracy': 100, 'status': 'flinch', 'status_chance': 100},
     'Fake Tears': {'type': 'Dark', 'category': 'Physical', 'effect': '', 'accuracy': 100},
     'Fire Blast': {'type': 'Fire', 'category': 'Physical', 'effect': '', 'power': 110, 'accuracy': 85, 'status': 'burned', 'status_chance': 10},
     'Fire Punch': {'type': 'Fire', 'category': 'Physical', 'effect': '', 'power': 75, 'accuracy': 100},

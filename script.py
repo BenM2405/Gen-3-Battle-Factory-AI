@@ -1,9 +1,24 @@
 import pandas as pd
+import random
+import matplotlib.pyplot as plt
+import csv
+from itertools import combinations
 from pokemon import Pokemon
 from type_chart import type_chart
 from move_types_full import move_types
 from items import item_effects
-import random
+from abilities import abilities as ability_lookup
+from ability_effects import (
+    check_immunity,
+    modify_attack,
+    modify_speed,
+    boost_type_if_lowhp,
+    apply_contact_ability,
+    should_heal_on_hit,
+    prevent_status,
+    on_entry_lower_stat
+)
+
 
 def effectiveness(attacking_type, defending_type):
     return type_chart.get(attacking_type, {}).get(defending_type, 1.0)
@@ -11,7 +26,24 @@ def effectiveness(attacking_type, defending_type):
 base_stats_df = pd.read_csv("basestats.csv")
 base_stats_df.columns = [col.strip().lower().replace(" ", "_") for col in base_stats_df.columns]
 base_stats_df.set_index("name", inplace=True)
-ALL_STATUSES = ['paralyzed', 'burned', 'poisoned', 'confused', 'infatuated', 'asleep']
+ALL_STATUSES = ['paralyzed', 'burned', 'poisoned', 'confused', 'infatuated', 'asleep', 'spd_down', 'spa_down', 'atk_down', 'def_down']
+
+#choose random set
+def parse_random_ability(possible):
+    if pd.isna(possible):
+        return None
+    options = [a.strip() for a in possible.split("/")]
+    return random.choice(options)
+
+#parse pokemon and random ability
+def build_rental_pool(df, count=6):
+    pool_rows = df.sample(n=count)
+    updated_rows = []
+    for _, row in pool_rows.iterrows():
+        row = row.copy()
+        row["ability"] = parse_random_ability(row["possible_ability"])
+        updated_rows.append(row_to_pokemon(row))
+    return updated_rows
 
 #turns our silly little pokemon into data
 def row_to_pokemon(row):
@@ -51,7 +83,7 @@ def row_to_pokemon(row):
     
     item = row['item']
 
-    return Pokemon(name, types, moves, stats, item=item)
+    return Pokemon(name, types, moves, stats, item=item, ability=row.get("ability", None))
 
 ALL_DEFENDING_TYPES = set(type_chart['Fire'].keys())
 
@@ -98,6 +130,18 @@ def score_team(team):
         total_score += 1
     
     return total_score
+
+def choose_top_team(pokemon_list, team_size = 3):
+    best_team = None
+    best_score = float('-inf')
+
+    for combo in combinations(pokemon_list, team_size):
+        score = score_team(combo)
+        if score > best_score:
+            best_score = score
+            best_team = combo
+    
+    return list(best_team)
 
 #checks move uses
 def score_move(pokemon, move_name, turn_count=1, current_hp=1.0, defender=None, status_effects=None):
@@ -197,18 +241,57 @@ def choose_best_move(attacker, defender, turn_count=1, current_hp=1.0, status_ef
         
     return best_move
 
+def should_switch(current, team, opponent, hp):
+    curr_hp = hp[current.name]
+    curr_spe = modify_speed(current, None, ability_lookup.get(current.ability, {}).get("effect", ""))
+    opp_spe = modify_speed(opponent, None, ability_lookup.get(opponent.ability, {}).get("effect", ""))
+
+    # if faster, get that last hit
+    if curr_hp < 30 and curr_spe >= opp_spe:
+        return None
+
+    # guess incoming move danger
+    highest_threat = 0
+    for move in opponent.moves:
+        move_data = move_types.get(move, {})
+        move_type = move_data.get("type", "")
+        move_power = move_data.get("power", 0)
+        if any(effectiveness(move_type, t) > 1.0 for t in current.types):
+            highest_threat += move_power
+
+    # if they're a big threat, just dont switch
+    if highest_threat >= curr_hp:
+        return None
+
+    # who would be better???
+    for candidate in team:
+        if candidate.name == current.name or hp[candidate.name] <= 0:
+            continue
+        for move in opponent.moves:
+            m = move_types.get(move, {})
+            move_type = m.get("type", "")
+            if any(effectiveness(move_type, t) < 1.0 for t in candidate.types):
+                return candidate
+    
+    return None
+
 
 #Battle Test
-def run_battle(p1, p2):
-    print(f"Battle Start: {p1.name} vs. {p2.name}!\n")
+def run_battle(player_team, enemy_team):
+    p1_active = player_team[0]
+    p2_active = enemy_team[0]
+    print(f"Battle Start: {p1_active.name} vs. {p2_active.name}!\n")
 
-    hp = {p1.name: 100, p2.name: 100}
+    hp = {mon.name: 100 for mon in player_team + enemy_team}
+    pp = {p1_active.name: {move: 10 for move in p1_active.moves}, p2_active.name: {move: 10 for move in p2_active.moves},}
     MAX_TURNS = 50
     turn = 1
 
-    item_used = {p1.name: False, p2.name: False}
+    active_turns = {p1_active.name: 0, p2_active.name: 0}
+
+    item_used = {p1_active.name: False, p2_active.name: False}
     status_effects = {
-        p1.name : {'infatuated': False, 
+        p1_active.name : {'infatuated': False, 
                    'confused': False, 
                    'turns_volatile': 0,
                    'paralyzed': False,
@@ -216,8 +299,9 @@ def run_battle(p1, p2):
                    'burned': False,
                    'poisoned': False,
                    'toxic_counter': 0,
+                   'flinched': False,
                    },
-        p2.name : {'infatuated': False, 
+        p2_active.name : {'infatuated': False, 
                    'confused': False, 
                    'turns_volatile': 0,
                    'paralyzed': False,
@@ -225,17 +309,58 @@ def run_battle(p1, p2):
                    'burned': False,
                    'poisoned': False,
                    'toxic_counter': 0,
+                   'flinched': False,
                    },
     }
+    weather = {'type': None, 'turns': 0}
+    def ensure_mon_initialized(mon):
+        if mon.name not in status_effects:
+            status_effects[mon.name] = {
+                k: (0 if 'down' in k or k in ['asleep', 'toxic_counter', 'turns_volatile'] else False)
+                for k in ALL_STATUSES + ['turns_volatile', 'toxic_counter', 'flinched']
+            }
+        if mon.name not in pp:
+            pp[mon.name] = {move: 10 for move in mon.moves}
+        if mon.name not in item_used:
+            item_used[mon.name] = False
+        if mon.name not in active_turns:
+            active_turns[mon.name] = 0
+
+    #basically intimidate check
+    for source, target in [(p1_active, p2_active), (p2_active, p1_active)]:
+        effect = ability_lookup.get(source.ability, {}).get('effect', '')
+        if effect.startswith('on_entry_lower:'):
+            stat = effect.split(":")[1]
+            lowered = on_entry_lower_stat(effect, stat, target.stats)
+            if lowered:
+                print(f"{source.name}'s {source.ability} lowered {target.name}'s {stat}!")
 
     #speed check
-    while hp[p1.name] > 0 and hp[p2.name] > 0 and turn <= MAX_TURNS:
+    while hp[p1_active.name] > 0 and hp[p2_active.name] > 0 and turn <= MAX_TURNS:
         print(f"Turn {turn}")
 
-        if p1.stats['spe'] > p2.stats['spe']:
-            first, second = p1, p2
+        p1_active_spe = modify_speed(p1_active, weather['type'], ability_lookup.get(p1_active.ability, {}).get("effect", ""))
+        p2_active_spe = modify_speed(p2_active, weather['type'], ability_lookup.get(p2_active.ability, {}).get("effect", ""))
+        # Switching phase
+        p1_switch = should_switch(p1_active, player_team, p2_active, hp)
+        if p1_switch:
+            print(f"{p1_active.name} switches out! {p1_switch.name} is sent in!")
+            p1_active = p1_switch
+
+        p2_switch = should_switch(p2_active, enemy_team, p1_active, hp)
+        if p2_switch:
+            print(f"{p2_active.name} switches out! {p2_switch.name} is sent in!")
+            p2_active = p2_switch
+        
+        ensure_mon_initialized(p1_active)
+        ensure_mon_initialized(p2_active)
+        # calculate speed and turn order AFTER switching
+        p1_active_spe = modify_speed(p1_active, weather['type'], ability_lookup.get(p1_active.ability, {}).get("effect", ""))
+        p2_active_spe = modify_speed(p2_active, weather['type'], ability_lookup.get(p2_active.ability, {}).get("effect", ""))
+        if p1_active_spe > p2_active_spe:
+            first, second = p1_active, p2_active
         else:
-            first, second = p2, p1
+            first, second = p2_active, p1_active
 
         #each AI chooses a move
         first_move = choose_best_move(first, second, turn, hp[first.name] / 100, status_effects)
@@ -243,11 +368,25 @@ def run_battle(p1, p2):
 
         #calculates attacks
         for attacker, defender, move in [(first, second, first_move), (second, first, second_move)]:
+            active_turns[attacker.name] += 1
+            #pp check
+            if pp[attacker.name][move] <= 0:
+                print(f"{attacker.name} tried to use {move}, but it has no PP left!")
+                continue
+            pp[attacker.name][move] -= 1
+            if ability_lookup.get(defender.ability, {}).get("effect") == "ppdrop":
+                pp[attacker.name][move] = max(0, pp[attacker.name][move] - 1)
+                print(f"{defender.name}'s Pressure caused {move} to lose 2 PP!")
+
             if hp[defender.name] <= 0:
                 continue #if they're fainted its over
 
             effects = status_effects[attacker.name]
-
+            # check flinch
+            if effects['flinched']:
+                print(f"{attacker.name} flinched and couldn't move!")
+                effects['flinched'] = False
+                continue
             #confusion/infatuation check
             if effects['infatuated'] or effects['confused']:
                 if random.random() < 0.3:
@@ -291,6 +430,8 @@ def run_battle(p1, p2):
             power = move_data.get('power', 0) #0 if no damage
 
             #check accuracy
+            if move == "Thunder" and weather['type'] == 'Rain':
+                accuracy = 100
             accuracy = move_data.get('accuracy', 100) #100 by default since most are 100
             if random.randint(1, 100) > accuracy:
                 print(f"{attacker.name} used {move}... but it missed!")
@@ -335,24 +476,36 @@ def run_battle(p1, p2):
                         status_effects[defender.name][status_to_cure] = 0
                     item_used[defender.name] = True
                     print(f"{defender.name}'s {defender.item} cured its {status_to_cure}!")
-           
+            
             #checks if its a status
             if move_data.get('category') == 'Status' or power == 0:
                 print(f"{attacker.name} used {move} — no damage dealt (status move or non-damaging).")
                 continue
-
-            #PS split
+            #weather
+            if move_data.get('effect') == 'rain':
+                weather['type'] = 'Rain'
+                weather['turns'] = 5
+                print('It started to rain!')
+            elif move_data.get('effect') == 'sun':
+                weather['type'] = 'Sun'
+                weather['turns'] = 5
+                print('The sunlight turned harsh!')
+            #P/S split
             if move_data.get('category') == 'Special':
                 atk = attacker.stats['spa']
                 defense = defender.stats['spd']
             else:
                 atk = attacker.stats['atk']
                 defense = defender.stats['def']
-            
+            atk = modify_attack(attacker, ability_lookup.get(attacker.ability, {}).get("effect", ""), status_effects)
             eff = 1.0
             for t in defender.types:
                 eff *= effectiveness(move_type, t)
             
+            defender_effect = ability_lookup.get(defender.ability, {}).get('effect', '')
+            if check_immunity(defender_effect, move_type):
+                print(f"{attacker.name} used {move}... but {defender.name}'s {defender.ability} made it immune!")
+                continue
             if eff == 0.0:
                 print(f"{attacker.name} used {move}... but it had no effect!")
                 continue
@@ -361,22 +514,41 @@ def run_battle(p1, p2):
             if attacker.item in item_effects:
                 item = item_effects[attacker.item]
                 if item['trigger'] == 'on_move' and item.get('type') == move_type:
+                    power = max(1, power)
                     power = int(power * item['multiplier'])
                     print(f"{attacker.name}'s {attacker.item} boosted its {move_type} move!")
-
+            #weather boosts
+            if weather['type'] == 'Rain':
+                if move_type == 'Water':
+                    power = int(power * 1.5)
+                elif move_type == 'Fire':
+                    power = int(power * 0.5)
+            elif weather['type'] == 'Sun':
+                if move_type == 'Fire':
+                    power = int(power * 1.5)
+                elif move_type == 'Water':
+                    power = int(power * 0.5)
             #crits
             crit_chance = 6.25
             if attacker.item == "Scope Lens":
                 crit_chance = 12.5
             
             if random.uniform(0, 100) < crit_chance:
-                damage = int(damage * 2)
+                power = int(power * 2)
                 print("A Critical Hit!")
             
             #gen 3 formula (heavily simplified)
+            power = int(power * boost_type_if_lowhp(attacker, move_type, ability_lookup.get(attacker.ability, {}).get("effect", ""), hp[attacker.name] / 100))
             modifier = eff * random.uniform(0.85, 1.0)
             damage = int((((2 * 50 / 5 + 2) * power * atk / defense) / 50 + 2) * modifier)
 
+            #check healing abilities
+            attacker_effect = ability_lookup.get(defender.ability, {}).get("effect", "")
+            if should_heal_on_hit(attacker_effect, move_type):
+                heal_amt = int(100 * 0.25)
+                hp[defender.name] = min(100, hp[defender.name] + heal_amt)
+                print(f"{defender.name} absorbed the {move_type}-type move and healed!")
+                continue
             hp[defender.name] -= damage
             hp[defender.name] = max(0, hp[defender.name])
 
@@ -394,11 +566,18 @@ def run_battle(p1, p2):
 
             #annoying (xD) effectiveness flavor text
             print(f"{attacker.name} used {move}! It's {'super effective' if eff > 1 else 'not very effective' if eff < 1 else 'effective'}! {defender.name} took {damage} damage. (HP: {hp[defender.name]}/100)")
-            #also annoying shell bell check also move_landed placeholder for acc checks
-            if attacker.item == 'Shell Bell' and damage > 0: #and move_landed:
+            
+            #contact ability check
+            contact_effect = ability_lookup.get(defender.ability, {}).get("effect", "")
+            result = apply_contact_ability(defender, attacker, contact_effect, status_effects)
+            if result:
+                print(f"{attacker.name} was {result} due to contact with {defender.name}!")
+            
+            #also annoying shell bell check
+            if attacker.item == 'Shell Bell' and damage > 0:
                 heal = max(1, int(damage * item_effects['Shell Bell']['multiplier']))
                 hp[attacker.name] = min(100, hp[attacker.name] + heal)
-                print(f"{attacker.name} regained HP with it's Shell Bell!")
+                print(f"{attacker.name} regained HP with its Shell Bell!")
             
             #Focus band check
             if defender.item == "Focus Band" and damage >= hp[defender.name]:
@@ -423,35 +602,119 @@ def run_battle(p1, p2):
                     print(f"{attacker.name} is hurt by poison!")
                     poison_damage = max(1, hp[attacker.name] // 8)
                     hp[attacker.name] -= poison_damage
+            # chance to flinch the opponent
+            if move == "Fake Out":
+                if active_turns[attacker.name] == 1:
+                    if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
+                        status_effects[defender.name]['flinched'] = True
+                        print(f"{defender.name} flinched from Fake Out!")
+            else:
+                if move_data.get('status') == 'flinch':
+                    if random.randint(1, 100) <= move_data.get('status_chance', 0):
+                        if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
+                            status_effects[defender.name]['flinched'] = True
+                            print(f"{defender.name} flinched!")
+            if attacker.item == "King's Rock":
+                if random.random() <= item_effects["King's Rock"]["chance"]:
+                    if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
+                        status_effects[defender.name]['flinched'] = True
+                        print(f"{defender.name} flinched from King's Rock!")
+            #weather tick
+            if weather['type']:
+                weather['turns'] -= 1
+                if weather['turns'] == 0:
+                    print(f"The {weather['type']} faded.")
+                    weather['type'] = None
+                else:
+                    print(f"The {weather['type']} continues...")
 
+            #leftovers & other after turn items
+            for mon in [p1_active,p2_active]:
+                item = item_effects.get(mon.item, {})
+                if item.get('trigger') == 'end_turn' and item['effect'] == 'heal_percent':
+                    heal = max(1, int(hp[mon.name] * (item['value'] / 100)))
+                    hp[mon.name] = min(100, hp[mon.name] + heal)
+                    print(f"{mon.name} restored a little HP using its {mon.item}!")
+                turn += 1
+                if turn > MAX_TURNS:
+                    print("The battle lasted too long and ended in a draw!")
+                    break
             #check if they've fainted
             if hp[defender.name] == 0:
                 print(f"{defender.name} fainted!\n")
-                break
 
-    #leftovers & other after turn items
-    for mon in [p1,p2]:
-        item = item_effects.get(mon.item, {})
-        if item.get('trigger') == 'end_turn' and item['effect'] == 'heal_percent':
-            heal = max(1, int(hp[mon.name] * (item['value'] / 100)))
-            hp[mon.name] = min(100, hp[mon.name] + heal)
-            print(f"{mon.name} restored a little HP using its {mon.item}!")
-        turn += 1
-        if turn > MAX_TURNS:
-            print("The battle lasted too long and ended in a draw!")
-            break
-    winner = p1.name if hp[p1.name] > 0 else p2.name
-    print(f"{winner} wins the battle!")
+                #check if they have more mons
+                team = player_team if defender.name in [m.name for m in player_team] else enemy_team
+                available = [mon for mon in team if hp[mon.name] > 0]
+
+                if available:
+                    next_mon = available[0]
+                    print(f"{defender.name}'s trainer sends out {next_mon.name}!")
+                    if defender == p1_active:
+                        p1_active = next_mon
+                    else:
+                        p2_active = next_mon
+
+                    #initialize everything
+                    ensure_mon_initialized(p1_active)
+                    ensure_mon_initialized(p2_active)
+
+                    break  # continue w next mon
+                else:
+                    break  # u lost bro...
+
+    if any(hp[mon.name] > 0 for mon in player_team):
+        print(f"{p1_active.name} wins the battle!")
+    elif any(hp[mon.name] > 0 for mon in enemy_team):
+        print(f"{p2_active.name} wins the battle!")
+    else:
+        print("Both teams fainted! It's a draw!")
+
+    if any(hp[mon.name] > 0 for mon in player_team):
+        return "player"
+    elif any(hp[mon.name] > 0 for mon in enemy_team):
+        return "enemy"
+    else:
+        return "draw"
 
 if __name__ == "__main__":
     df = pd.read_csv("L50R1P.csv")
     df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
+    all_pokemon_list = [row_to_pokemon(row) for _, row in df.iterrows()]
+    rental_pool_player = build_rental_pool(df)
+    rental_pool_enemy = build_rental_pool(df)
 
-    pokemon_list = [row_to_pokemon(row) for _, row in df.iterrows()]
-    print(pokemon_list[423])
-    print(pokemon_list[129])
+    player_team = choose_top_team(rental_pool_player)
+    enemy_team = choose_top_team(rental_pool_enemy)
 
-    ben_mon = pokemon_list[423]
-    enemy_mon = pokemon_list[129]
-    run_battle(ben_mon, enemy_mon)
+    # Currently run_battle only supports 1v1; this runs the lead matchup
+    # run_battle(player_team, enemy_team)
+
+results = {"player": 0, "enemy": 0, "draw": 0}
+results_log = []
+for i in range(500):  # try 100 to start, scale up later
+    player_team = random.sample(all_pokemon_list, 3)
+    enemy_team = random.sample(all_pokemon_list, 3)
+    winner = run_battle(player_team, enemy_team)
+    results[winner] += 1
+    results_log.append(winner)
+    print(f"Game {i+1}: {winner}")
+
+
+labels = results.keys()
+values = results.values()
+
+plt.bar(labels, values, color=['green', 'red', 'gray'])
+plt.title("AI Battle Outcomes (3v3)")
+plt.xlabel("Winner")
+plt.ylabel("Number of Wins")
+plt.show()
+
+with open("battle_logs.csv", "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["Match", "Winner"])
+    for i, result in enumerate(results_log):
+        writer.writerow([i+1, result])
+
+
     
