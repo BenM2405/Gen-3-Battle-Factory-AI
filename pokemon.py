@@ -1,9 +1,10 @@
 class Pokemon:
-    def __init__(self, name, types, moves, stats):
+    def __init__(self, name, types, moves, stats, item):
         self.name = name
         self.types = types
         self.moves = moves
         self.stats = stats
+        self.item = item
     
     def __str__(self):
         return f"{self.name} ({'/'.join(self.types)}): {', '.join(self.moves)}"

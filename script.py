@@ -2,6 +2,7 @@ import pandas as pd
 from pokemon import Pokemon
 from type_chart import type_chart
 from move_types_full import move_types
+from items import item_effects
 import random
 
 def effectiveness(attacking_type, defending_type):
@@ -10,6 +11,7 @@ def effectiveness(attacking_type, defending_type):
 base_stats_df = pd.read_csv("basestats.csv")
 base_stats_df.columns = [col.strip().lower().replace(" ", "_") for col in base_stats_df.columns]
 base_stats_df.set_index("name", inplace=True)
+ALL_STATUSES = ['paralyzed', 'burned', 'poisoned', 'confused', 'infatuated', 'asleep']
 
 #turns our silly little pokemon into data
 def row_to_pokemon(row):
@@ -46,9 +48,10 @@ def row_to_pokemon(row):
     except KeyError:
         print(f"Could not find base stats for: {name}")
         stats = {key: 100 for key in ['hp', 'atk', 'def', 'spa', 'spd', 'spe']}
+    
+    item = row['item']
 
-
-    return Pokemon(name, types, moves, stats)
+    return Pokemon(name, types, moves, stats, item=item)
 
 ALL_DEFENDING_TYPES = set(type_chart['Fire'].keys())
 
@@ -203,6 +206,7 @@ def run_battle(p1, p2):
     MAX_TURNS = 50
     turn = 1
 
+    item_used = {p1.name: False, p2.name: False}
     status_effects = {
         p1.name : {'infatuated': False, 
                    'confused': False, 
@@ -259,37 +263,39 @@ def run_battle(p1, p2):
                         effects['turns_volatile'] += 1
                         continue
 
-            #status checks
+            # move hindering status checks
             if effects['paralyzed']:
                 if random.random() <= 0.25:
                     print(f"{attacker.name} is fully paralyzed!")
                     continue
-            
-            if effects['burned']:
-                burn_damage = max(1, hp[attacker.name] // 8)
-                print(f"{attacker.name} is hurt by it's burn!")
-                hp[attacker.name] -= burn_damage
-            
-            if effects['poisoned']:
-                if effects['toxic_counter'] > 0:
-                    print(f"{attacker.name} is badly poisoned!")
-                    toxic_damage = max(1, hp[attacker.name] * effects['toxic_counter'] // 16)
-                    hp[attacker.name] -= toxic_damage
-                    effects['toxic_counter'] += 1
-                else:
-                    print(f"{attacker.name} is hurt by poison!")
-                    poison_damage = max(1, hp[attacker.name] // 8)
-                    hp[attacker.name] -= poison_damage
-            
             if effects['asleep'] > 0:
                 print(f"{attacker.name} is fast asleep!")
                 effects['asleep'] -= 1
                 continue
 
+            #basically sitrus berry check
+            item = item_effects.get(attacker.item, {})
+            if (
+                not item_used[attacker.name]
+                and item.get('trigger') == 'low_hp'
+                and hp[attacker.name] <= 100 * item['threshold']
+            ):
+                if item['effect'] == 'heal_flat':
+                    hp[attacker.name] = min(100, hp[attacker.name] + item['value'])
+                    item_used[attacker.name] = True
+                    print(f"{attacker.name} restored health using its {attacker.item}!")
+
             
             move_data = move_types.get(move, {})
             move_type = move_data.get('type', '')
             power = move_data.get('power', 0) #0 if no damage
+
+            #check accuracy
+            accuracy = move_data.get('accuracy', 100) #100 by default since most are 100
+            if random.randint(1, 100) > accuracy:
+                print(f"{attacker.name} used {move}... but it missed!")
+                continue
+
 
             #check if move can give effects
             if move_data.get('effect') == 'infatuate':
@@ -309,7 +315,27 @@ def run_battle(p1, p2):
                 status_effects[defender.name]['toxic_counter'] = 1
                 print(f"{attacker.name} used {move}. {defender.name} is badly poisoned!")
 
-            
+            #cure items
+            item = item_effects.get(defender.item, {})
+
+            if not item_used[defender.name] and item.get('trigger') == 'status':
+                effect = item.get('effect')
+                status_to_cure = item.get('status')
+                #cureall (lum)
+                if effect == "cure_all_status":
+                    for k in ALL_STATUSES:
+                        status_effects[defender.name][k] = False if isinstance(status_effects[defender.name][k], bool) else 0
+                    item_used[defender.name] = True
+                    print(f"{defender.name}'s {defender.item} cured all status conditions!")
+                #cure some (pecha, rawst, etc)
+                elif status_to_cure and status_effects[defender.name].get(status_to_cure):
+                    if isinstance(status_effects[defender.name][status_to_cure], bool):
+                        status_effects[defender.name][status_to_cure] = False
+                    else:
+                        status_effects[defender.name][status_to_cure] = 0
+                    item_used[defender.name] = True
+                    print(f"{defender.name}'s {defender.item} cured its {status_to_cure}!")
+           
             #checks if its a status
             if move_data.get('category') == 'Status' or power == 0:
                 print(f"{attacker.name} used {move} — no damage dealt (status move or non-damaging).")
@@ -331,19 +357,85 @@ def run_battle(p1, p2):
                 print(f"{attacker.name} used {move}... but it had no effect!")
                 continue
 
+            #attack boosters (Nevermeltice, metal coat, etc.)
+            if attacker.item in item_effects:
+                item = item_effects[attacker.item]
+                if item['trigger'] == 'on_move' and item.get('type') == move_type:
+                    power = int(power * item['multiplier'])
+                    print(f"{attacker.name}'s {attacker.item} boosted its {move_type} move!")
+
+            #crits
+            crit_chance = 6.25
+            if attacker.item == "Scope Lens":
+                crit_chance = 12.5
+            
+            if random.uniform(0, 100) < crit_chance:
+                damage = int(damage * 2)
+                print("A Critical Hit!")
+            
             #gen 3 formula (heavily simplified)
             modifier = eff * random.uniform(0.85, 1.0)
             damage = int((((2 * 50 / 5 + 2) * power * atk / defense) / 50 + 2) * modifier)
 
             hp[defender.name] -= damage
             hp[defender.name] = max(0, hp[defender.name])
+
+            #status infliction check
+            status = move_data.get('status')
+            chance = move_data.get('status_chance', 0)
+
+            if status and random.randint(1, 100) <= chance:
+                if not status_effects[defender.name].get(status):
+                    if isinstance(status_effects[defender.name][status], bool):
+                        status_effects[defender.name][status] = True
+                    else:
+                        status_effects[defender.name][status] = 1
+                    print(f"{defender.name} was affected by {status}!")
+
             #annoying (xD) effectiveness flavor text
             print(f"{attacker.name} used {move}! It's {'super effective' if eff > 1 else 'not very effective' if eff < 1 else 'effective'}! {defender.name} took {damage} damage. (HP: {hp[defender.name]}/100)")
+            #also annoying shell bell check also move_landed placeholder for acc checks
+            if attacker.item == 'Shell Bell' and damage > 0: #and move_landed:
+                heal = max(1, int(damage * item_effects['Shell Bell']['multiplier']))
+                hp[attacker.name] = min(100, hp[attacker.name] + heal)
+                print(f"{attacker.name} regained HP with it's Shell Bell!")
             
+            #Focus band check
+            if defender.item == "Focus Band" and damage >= hp[defender.name]:
+                if random.random() < item_effects['Focus Band']['chance']:
+                    damage = hp[defender.name] - 1
+                    print(f"{defender.name} held on with its Focus Band!")
+            
+
+            #damaging status effect checks
+            if effects['burned']:
+                burn_damage = max(1, hp[attacker.name] // 8)
+                print(f"{attacker.name} is hurt by it's burn!")
+                hp[attacker.name] -= burn_damage
+            
+            if effects['poisoned']:
+                if effects['toxic_counter'] > 0:
+                    print(f"{attacker.name} is badly poisoned!")
+                    toxic_damage = max(1, hp[attacker.name] * effects['toxic_counter'] // 16)
+                    hp[attacker.name] -= toxic_damage
+                    effects['toxic_counter'] += 1
+                else:
+                    print(f"{attacker.name} is hurt by poison!")
+                    poison_damage = max(1, hp[attacker.name] // 8)
+                    hp[attacker.name] -= poison_damage
+
+            #check if they've fainted
             if hp[defender.name] == 0:
                 print(f"{defender.name} fainted!\n")
                 break
 
+    #leftovers & other after turn items
+    for mon in [p1,p2]:
+        item = item_effects.get(mon.item, {})
+        if item.get('trigger') == 'end_turn' and item['effect'] == 'heal_percent':
+            heal = max(1, int(hp[mon.name] * (item['value'] / 100)))
+            hp[mon.name] = min(100, hp[mon.name] + heal)
+            print(f"{mon.name} restored a little HP using its {mon.item}!")
         turn += 1
         if turn > MAX_TURNS:
             print("The battle lasted too long and ended in a draw!")
