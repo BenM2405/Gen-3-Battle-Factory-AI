@@ -26,7 +26,7 @@ def effectiveness(attacking_type, defending_type):
 base_stats_df = pd.read_csv("basestats.csv")
 base_stats_df.columns = [col.strip().lower().replace(" ", "_") for col in base_stats_df.columns]
 base_stats_df.set_index("name", inplace=True)
-ALL_STATUSES = ['paralyzed', 'burned', 'poisoned', 'confused', 'infatuated', 'asleep', 'spd_down', 'spa_down', 'atk_down', 'def_down']
+ALL_STATUSES = ['paralyzed', 'burned', 'poisoned', 'confused', 'infatuated', 'asleep', 'frozen', 'turns_volatile', 'toxic_counter']
 
 #choose random set
 def parse_random_ability(possible):
@@ -147,11 +147,8 @@ def choose_top_team(pokemon_list, team_size = 3):
 def score_move(pokemon, move_name, turn_count=1, current_hp=1.0, defender=None, status_effects=None):
     move_data = move_types.get(move_name, {})
     effect = move_data.get('effect', '')
-    power = move_data.get('power', 0)
-    category = move_data.get('category', '')
 
     effect_key = 'infatuated' if effect == 'infatuate' else 'confused'
-
     score = 0
 
     # desperate play
@@ -161,13 +158,7 @@ def score_move(pokemon, move_name, turn_count=1, current_hp=1.0, defender=None, 
         else:
             score -= 5
 
-    # setup moves
-    if effect in ['atk_up', 'spa_spd_up', 'atk_def_up', 'atk_spe_up']:
-        if turn_count <= 2 and current_hp > 0.7:
-            score += 3
-        else:
-            score -= 1
-
+    #setup moves
     elif effect == 'heal':
         if current_hp < 0.4:
             score += 3
@@ -283,7 +274,6 @@ def run_battle(player_team, enemy_team):
     print(f"Battle Start: {p1_active.name} vs. {p2_active.name}!\n")
 
     hp = {mon.name: 100 for mon in player_team + enemy_team}
-    pp = {p1_active.name: {move: 10 for move in p1_active.moves}, p2_active.name: {move: 10 for move in p2_active.moves},}
     MAX_TURNS = 50
     turn = 1
 
@@ -296,20 +286,20 @@ def run_battle(player_team, enemy_team):
                    'turns_volatile': 0,
                    'paralyzed': False,
                    'asleep': 0,
+                   'frozen' : 0,
                    'burned': False,
                    'poisoned': False,
                    'toxic_counter': 0,
-                   'flinched': False,
                    },
         p2_active.name : {'infatuated': False, 
                    'confused': False, 
                    'turns_volatile': 0,
                    'paralyzed': False,
                    'asleep': 0,
+                   'frozen' : 0,
                    'burned': False,
                    'poisoned': False,
                    'toxic_counter': 0,
-                   'flinched': False,
                    },
     }
     weather = {'type': None, 'turns': 0}
@@ -317,10 +307,8 @@ def run_battle(player_team, enemy_team):
         if mon.name not in status_effects:
             status_effects[mon.name] = {
                 k: (0 if 'down' in k or k in ['asleep', 'toxic_counter', 'turns_volatile'] else False)
-                for k in ALL_STATUSES + ['turns_volatile', 'toxic_counter', 'flinched']
+                for k in ALL_STATUSES
             }
-        if mon.name not in pp:
-            pp[mon.name] = {move: 10 for move in mon.moves}
         if mon.name not in item_used:
             item_used[mon.name] = False
         if mon.name not in active_turns:
@@ -369,24 +357,10 @@ def run_battle(player_team, enemy_team):
         #calculates attacks
         for attacker, defender, move in [(first, second, first_move), (second, first, second_move)]:
             active_turns[attacker.name] += 1
-            #pp check
-            if pp[attacker.name][move] <= 0:
-                print(f"{attacker.name} tried to use {move}, but it has no PP left!")
-                continue
-            pp[attacker.name][move] -= 1
-            if ability_lookup.get(defender.ability, {}).get("effect") == "ppdrop":
-                pp[attacker.name][move] = max(0, pp[attacker.name][move] - 1)
-                print(f"{defender.name}'s Pressure caused {move} to lose 2 PP!")
-
             if hp[defender.name] <= 0:
                 continue #if they're fainted its over
 
             effects = status_effects[attacker.name]
-            # check flinch
-            if effects['flinched']:
-                print(f"{attacker.name} flinched and couldn't move!")
-                effects['flinched'] = False
-                continue
             #confusion/infatuation check
             if effects['infatuated'] or effects['confused']:
                 if random.random() < 0.3:
@@ -410,6 +384,10 @@ def run_battle(player_team, enemy_team):
             if effects['asleep'] > 0:
                 print(f"{attacker.name} is fast asleep!")
                 effects['asleep'] -= 1
+                continue
+            if effects['frozen'] > 0:
+                print(f"{attacker.name} is frozen!")
+                effects['frozen'] -= 1
                 continue
 
             #basically sitrus berry check
@@ -439,22 +417,22 @@ def run_battle(player_team, enemy_team):
 
 
             #check if move can give effects
-            if move_data.get('effect') == 'infatuate':
-                status_effects[defender.name]['infatuated'] = True
-                print(f"{attacker.name} used {move}. {defender.name} is in love!")
-            elif move_data.get('effect') == 'confuse':
-                status_effects[defender.name]['confused'] = True
-                print(f'{attacker.name} used {move}. {defender.name} is confused!')
-            elif move_data.get('effect') == 'paralyze':
-                status_effects[defender.name]['paralyzed'] = True
-                print(f"{attacker.name} used {move}. {defender.name} is paralyzed! It may be unable to move!")
-            elif move_data.get('effect') == 'burn':
-                status_effects[defender.name]['burned'] = True
-                print(f"{attacker.name} used {move}. {defender.name} was burned!")
-            elif move_data.get('effect') == 'toxic':
-                status_effects[defender.name]['poisoned'] = True
-                status_effects[defender.name]['toxic_counter'] = 1
-                print(f"{attacker.name} used {move}. {defender.name} is badly poisoned!")
+            effectspeech = {
+                'infatuate': ('infatuated', f"{attacker.name} used {move}. {defender.name} is in love!"),
+                'confuse': ('confused', f"{attacker.name} used {move}. {defender.name} is confused!"),
+                'paralyze': ('paralyzed', f"{attacker.name} used {move}. {defender.name} is paralyzed! It may be unable to move!"),
+                'burn': ('burned', f"{attacker.name} used {move}. {defender.name} was burned!"),
+                'toxic': (('poisoned', 'toxic_counter'), f"{attacker.name} used {move}. {defender.name} is badly poisoned!"),
+            }
+            effect = move_data.get('effect')
+            if effect in effectspeech:
+                keys, message = effectspeech[effect]
+                if isinstance(keys, tuple): 
+                    status_effects[defender.name][keys[0]] = True
+                    status_effects[defender.name][keys[1]] = 1
+                else:
+                    status_effects[defender.name][keys] = True
+                print(message)
 
             #cure items
             item = item_effects.get(defender.item, {})
@@ -602,23 +580,6 @@ def run_battle(player_team, enemy_team):
                     print(f"{attacker.name} is hurt by poison!")
                     poison_damage = max(1, hp[attacker.name] // 8)
                     hp[attacker.name] -= poison_damage
-            # chance to flinch the opponent
-            if move == "Fake Out":
-                if active_turns[attacker.name] == 1:
-                    if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
-                        status_effects[defender.name]['flinched'] = True
-                        print(f"{defender.name} flinched from Fake Out!")
-            else:
-                if move_data.get('status') == 'flinch':
-                    if random.randint(1, 100) <= move_data.get('status_chance', 0):
-                        if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
-                            status_effects[defender.name]['flinched'] = True
-                            print(f"{defender.name} flinched!")
-            if attacker.item == "King's Rock":
-                if random.random() <= item_effects["King's Rock"]["chance"]:
-                    if ability_lookup.get(defender.ability, {}).get("effect") != "noflinch":
-                        status_effects[defender.name]['flinched'] = True
-                        print(f"{defender.name} flinched from King's Rock!")
             #weather tick
             if weather['type']:
                 weather['turns'] -= 1
@@ -628,17 +589,6 @@ def run_battle(player_team, enemy_team):
                 else:
                     print(f"The {weather['type']} continues...")
 
-            #leftovers & other after turn items
-            for mon in [p1_active,p2_active]:
-                item = item_effects.get(mon.item, {})
-                if item.get('trigger') == 'end_turn' and item['effect'] == 'heal_percent':
-                    heal = max(1, int(hp[mon.name] * (item['value'] / 100)))
-                    hp[mon.name] = min(100, hp[mon.name] + heal)
-                    print(f"{mon.name} restored a little HP using its {mon.item}!")
-                turn += 1
-                if turn > MAX_TURNS:
-                    print("The battle lasted too long and ended in a draw!")
-                    break
             #check if they've fainted
             if hp[defender.name] == 0:
                 print(f"{defender.name} fainted!\n")
@@ -662,6 +612,18 @@ def run_battle(player_team, enemy_team):
                     break  # continue w next mon
                 else:
                     break  # u lost bro...
+
+            #leftovers & other after turn items
+            for mon in [p1_active,p2_active]:
+                item = item_effects.get(mon.item, {})
+                if item.get('trigger') == 'end_turn' and item['effect'] == 'heal_percent':
+                    heal = max(1, int(hp[mon.name] * (item['value'] / 100)))
+                    hp[mon.name] = min(100, hp[mon.name] + heal)
+                    print(f"{mon.name} restored a little HP using its {mon.item}!")
+                turn += 1
+                if turn > MAX_TURNS:
+                    print("The battle lasted too long and ended in a draw!")
+                    break
 
     if any(hp[mon.name] > 0 for mon in player_team):
         print(f"{p1_active.name} wins the battle!")
